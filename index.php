@@ -226,54 +226,7 @@ $deviceStatus = [
                 </div>
 
                 <!-- Device Status -->
-                <div class="card">
-                    <div class="card-header">
-                        <h2>Device Status</h2>
-                        <div class="status-indicator online">
-                            <div class="status-dot"></div>
-                            <span>Online</span>
-                        </div>
-                    </div>
-                    <div class="device-status-list">
-                        <div class="device-item">
-                            <div class="device-info">
-                                <svg class="device-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <rect x="1" y="3" width="15" height="13"></rect>
-                                    <polygon points="16,3 16,13 22,8 16,3"></polygon>
-                                </svg>
-                                <span>Battery Level</span>
-                            </div>
-                            <div class="battery-indicator">
-                                <div class="battery-bar">
-                                    <div class="battery-fill" style="width: <?= $deviceStatus['battery'] ?>%"></div>
-                                </div>
-                                <span><?= $deviceStatus['battery'] ?>%</span>
-                            </div>
-                        </div>
-                        <div class="device-item">
-                            <div class="device-info">
-                                <svg class="device-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M5 12.55a11 11 0 0 1 14.08 0"></path>
-                                    <path d="M1.42 9a16 16 0 0 1 21.16 0"></path>
-                                    <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
-                                    <line x1="12" y1="20" x2="12.01" y2="20"></line>
-                                </svg>
-                                <span>Connection</span>
-                            </div>
-                            <span class="connection-status"><?= $deviceStatus['connection'] ?></span>
-                        </div>
-                        <div class="device-item">
-                            <div class="device-info">
-                                <svg class="device-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
-                                    <circle cx="12" cy="10" r="3"></circle>
-                                </svg>
-                                <span>Last Location</span>
-                            </div>
-                            <span class="location-info"><?= $deviceStatus['last_location'] ?></span>
-                        </div>
-                    </div>
-                </div>
+              
             </div>
 
         </main>

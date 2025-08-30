@@ -1,8 +1,8 @@
 <?php
 // Database configuration
 define('DB_HOST', 'localhost');
-define('DB_NAME', 'adminn_db1');
-define('DB_USER', 'adminn_db1'); // Change to your MariaDB username
+define('DB_NAME', 'admins2_db1');
+define('DB_USER', 'admins2_db1'); // Change to your MariaDB username
 define('DB_PASS', '&p@@a3Dk$amY@NSY#W'); // Change to your MariaDB password
 
 // API configuration
@@ -14,7 +14,6 @@ define('MAX_FILE_SIZE', 5 * 1024 * 1024); // 5MB
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, Authorization, X-API-Key');
-header('Content-Type: application/json');
 
 // Handle preflight requests
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
@@ -59,6 +58,14 @@ function sendError($message, $status = 400) {
     http_response_code($status);
     echo json_encode(['error' => $message]);
     exit();
+}
+
+// Generate a proper UUID v4
+function generateUUID() {
+    $data = random_bytes(16);
+    $data[6] = chr(ord($data[6]) & 0x0f | 0x40); // set version to 0100
+    $data[8] = chr(ord($data[8]) & 0x3f | 0x80); // set bits 6-7 to 10
+    return vsprintf('%s%s-%s-%s-%s-%s%s%s', str_split(bin2hex($data), 4));
 }
 
 // Create audio directory if it doesn't exist

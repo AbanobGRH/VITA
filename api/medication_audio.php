@@ -17,36 +17,51 @@ switch ($method) {
         sendError('Method not allowed', 405);
 }
 
-// Removed POST TTS generation. TTS is now handled in medication.php when saving medication.
-// For ESP: Get next medication reminder time and audio file
+// Get next medication reminder for ESP32 device
 function getNextReminderForESP() {
     $userId = $_GET['user_id'] ?? '';
     if (!$userId) sendError('User ID required');
+    
     $pdo = getDBConnection();
-    $stmt = $pdo->prepare("SELECT mr.*, m.name FROM medication_reminders mr JOIN medications m ON mr.medication_id = m.id WHERE mr.user_id = ? AND mr.reminder_time > NOW() AND mr.is_taken = FALSE ORDER BY mr.reminder_time ASC LIMIT 1");
+    
+    // Get the next medication with audio file
+    $stmt = $pdo->prepare("
+        SELECT id, name, dosage, audio_file_path, times 
+        FROM medications 
+        WHERE user_id = ? AND is_active = 1 AND audio_file_path IS NOT NULL 
+        ORDER BY created_at DESC 
+        LIMIT 1
+    ");
     $stmt->execute([$userId]);
-    $reminder = $stmt->fetch(PDO::FETCH_ASSOC);
-    if ($reminder) {
-        $filename = "tts_" . md5($userId . $reminder['name']) . ".mp3";
-        $filepath = AUDIO_UPLOAD_PATH . $filename;
-        if (!file_exists($filepath)) {
-            generateTTSAudio($reminder['name'], $filepath);
+    $medication = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($medication && $medication['audio_file_path']) {
+        $audioPath = AUDIO_UPLOAD_PATH . $medication['audio_file_path'];
+        
+        if (file_exists($audioPath)) {
+            $url = 'http://' . $_SERVER['HTTP_HOST'] . '/api/audio/' . $medication['audio_file_path'];
+            sendResponse([
+                'medication_id' => $medication['id'],
+                'medication' => $medication['name'],
+                'dosage' => $medication['dosage'],
+                'times' => $medication['times'],
+                'audio_url' => $url,
+                'filename' => $medication['audio_file_path']
+            ]);
+        } else {
+            sendError('Audio file not found');
         }
-        $url = 'http://' . $_SERVER['HTTP_HOST'] . '/api/audio/' . $filename;
-        sendResponse([
-            'reminder_time' => $reminder['reminder_time'],
-            'medication' => $reminder['name'],
-            'audio_url' => $url,
-            'filename' => $filename
-        ]);
     } else {
-        sendResponse(['reminder_time' => null, 'medication' => null, 'audio_url' => null]);
+        sendResponse([
+            'medication_id' => null,
+            'medication' => null,
+            'audio_url' => null
+        ]);
     }
 }
 
 function getMedicationAudioFiles() {
     $userId = $_GET['user_id'] ?? '';
-    $lastCheck = $_GET['last_check'] ?? date('Y-m-d H:i:s', strtotime('-5 minutes'));
     
     if (!$userId) {
         sendError('User ID required');
@@ -54,61 +69,41 @@ function getMedicationAudioFiles() {
     
     $pdo = getDBConnection();
     
-    // Get new audio files since last check
+    // Get all medications with audio files for the user
     $stmt = $pdo->prepare("
-        SELECT mr.*, m.name, m.dosage 
-        FROM medication_reminders mr 
-        JOIN medications m ON mr.medication_id = m.id 
-        WHERE mr.user_id = ? 
-        AND mr.audio_file_path IS NOT NULL
-        AND mr.created_at > ?
-        AND mr.is_taken = FALSE
-        ORDER BY mr.reminder_time ASC
+        SELECT id, name, dosage, frequency, times, audio_file_path, created_at
+        FROM medications 
+        WHERE user_id = ? 
+        AND is_active = 1
+        AND audio_file_path IS NOT NULL
+        ORDER BY created_at DESC
     ");
-    $stmt->execute([$userId, $lastCheck]);
-    $newFiles = $stmt->fetchAll();
+    $stmt->execute([$userId]);
+    $medications = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     $response = [
-        'new_files' => [],
+        'medications' => [],
         'current_time' => date('Y-m-d H:i:s')
     ];
     
-    foreach ($newFiles as $file) {
-        if (file_exists(AUDIO_UPLOAD_PATH . $file['audio_file_path'])) {
-            $response['new_files'][] = [
-                'reminder_id' => $file['id'],
-                'filename' => $file['audio_file_path'],
-                'reminder_time' => $file['reminder_time'],
-                'medication' => $file['name'],
-                'dosage' => $file['dosage'],
-                'url' => 'http://' . $_SERVER['HTTP_HOST'] . '/api/audio/' . $file['audio_file_path']
+    foreach ($medications as $medication) {
+        $audioPath = AUDIO_UPLOAD_PATH . $medication['audio_file_path'];
+        
+        if (file_exists($audioPath)) {
+            $response['medications'][] = [
+                'id' => $medication['id'],
+                'name' => $medication['name'],
+                'dosage' => $medication['dosage'],
+                'frequency' => $medication['frequency'],
+                'times' => $medication['times'],
+                'filename' => $medication['audio_file_path'],
+                'url' => 'http://' . $_SERVER['HTTP_HOST'] . '/api/audio/' . $medication['audio_file_path'],
+                'created_at' => $medication['created_at']
             ];
         }
     }
     
     sendResponse($response);
-}
-
-function generateTTSAudio($text, $filepath) {
-    // For Windows, use SAPI
-    if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
-        $command = "powershell -Command \"Add-Type -AssemblyName System.Speech; $speak = New-Object System.Speech.Synthesis.SpeechSynthesizer; $speak.SetOutputToWaveFile('$filepath'); $speak.Speak('$text'); $speak.Dispose()\"";
-        exec($command, $output, $returnCode);
-        return file_exists($filepath);
-    } else {
-        // Linux: espeak to WAV, then ffmpeg to MP3
-        $wavPath = str_replace('.mp3', '.wav', $filepath);
-        $command = "espeak -s 150 -v en+f3 -w " . escapeshellarg($wavPath) . " " . escapeshellarg($text);
-        exec($command, $output, $returnCode);
-        if ($returnCode === 0 && file_exists($wavPath)) {
-            exec("ffmpeg -y -i " . escapeshellarg($wavPath) . " " . escapeshellarg($filepath), $output2, $returnCode2);
-            if ($returnCode2 === 0 && file_exists($filepath)) {
-                unlink($wavPath);
-                return true;
-            }
-        }
-        return file_exists($filepath);
-    }
 }
 
 // Serve audio files

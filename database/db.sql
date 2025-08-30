@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS `medications` (
     `times` longtext NOT NULL, 
     `condition_for` varchar(255) DEFAULT NULL,
     `instructions` text DEFAULT NULL,
+    `audio_file_path` varchar(500) DEFAULT NULL,
     `is_active` tinyint(1) DEFAULT 1,
     `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
     `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp(),

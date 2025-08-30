@@ -11,7 +11,7 @@ $pdo = getDBConnection();
 
 // Handle delete medication POST
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_medication'])) {
-    $delete_id = trim($_POST['delete_id'] ?? '');
+    $delete_id = intval($_POST['delete_id'] ?? 0);
     if ($delete_id) {
         $stmt = $pdo->prepare("DELETE FROM medications WHERE id = ? AND user_id = ?");
         $stmt->execute([$delete_id, $userId]);
@@ -27,28 +27,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_medication'])) {
     $times = trim($_POST['times'] ?? '');
     $condition_for = trim($_POST['condition_for'] ?? '');
     $instructions = trim($_POST['instructions'] ?? '');
-    // Generate UUID for id
-    function generate_uuid() {
-        // Generate a version 4 UUID
-        return sprintf(
-            '%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
-            mt_rand(0, 0xffff), mt_rand(0, 0xffff),
-            mt_rand(0, 0xffff),
-            mt_rand(0, 0x0fff) | 0x4000,
-            mt_rand(0, 0x3fff) | 0x8000,
-            mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
-        );
-    }
+    
     if ($name && $dosage && $frequency && $times && $condition_for) {
-        $id = generate_uuid();
-        // Generate TTS audio for medication name
-        $audio_filename = "tts_" . md5($userId . $name) . ".mp3";
-        $audio_filepath = __DIR__ . "/api/audio/" . $audio_filename;
-        generate_medication_tts($name, $audio_filepath);
-        $stmt = $pdo->prepare("INSERT INTO medications (id, user_id, name, dosage, frequency, times, condition_for, instructions, is_active, audio_file_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, TRUE, ?)");
-        $stmt->execute([$id, $userId, $name, $dosage, $frequency, $times, $condition_for, $instructions, $audio_filename]);
-        header('Location: medication.php');
-        exit;
+        try {
+            // Use fixed UUID for user_id (don't generate unique ones)
+            $fixedUserId = '550e8400-e29b-41d4-a716-446655440000';
+            
+            // Generate TTS audio for medication name (with error handling)
+            $audio_filename = "tts_" . md5($fixedUserId . $name) . ".mp3";
+            $audio_filepath = __DIR__ . "/api/audio/" . $audio_filename;
+            
+            // Create audio directory if it doesn't exist
+            $audioDir = dirname($audio_filepath);
+            if (!is_dir($audioDir)) {
+                mkdir($audioDir, 0755, true);
+            }
+            
+            // Try TTS generation but don't fail if it doesn't work
+            try {
+                generate_medication_tts($name, $audio_filepath);
+            } catch (Exception $ttsError) {
+                // Log TTS error but continue with database insert
+                error_log("TTS generation failed: " . $ttsError->getMessage());
+            }
+            
+            // Insert without specifying ID (let it auto-increment)
+            $stmt = $pdo->prepare("INSERT INTO medications (user_id, name, dosage, frequency, times, condition_for, instructions, is_active, audio_file_path) VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, ?)");
+            $stmt->execute([$fixedUserId, $name, $dosage, $frequency, $times, $condition_for, $instructions, $audio_filename]);
+            
+            // Add success message
+            header('Location: medication.php?success=1');
+            exit;
+        } catch (PDOException $e) {
+            $add_error = 'Database error: ' . $e->getMessage();
+            error_log("Medication insert error: " . $e->getMessage());
+        } catch (Exception $e) {
+            $add_error = 'General error: ' . $e->getMessage();
+            error_log("Medication addition error: " . $e->getMessage());
+        }
     } else {
         $add_error = 'Please fill in all required fields.';
     }
@@ -84,19 +100,133 @@ $medications = $stmt->fetchAll();
 
 // TTS generation function
 function generate_medication_tts($text, $filepath) {
-    if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
-        $command = "powershell -Command \"Add-Type -AssemblyName System.Speech; $speak = New-Object System.Speech.Synthesis.SpeechSynthesizer; $speak.SetOutputToWaveFile('$filepath'); $speak.Speak('$text'); $speak.Dispose()\"";
-        exec($command);
+    // Create directory if it doesn't exist
+    $dir = dirname($filepath);
+    if (!is_dir($dir)) {
+        mkdir($dir, 0755, true);
+    }
+    
+    // Always use Google Translate TTS for consistent audio generation
+    return generateGoogleTTS($text, $filepath);
+}
+
+// Google Translate TTS function
+function generateGoogleTTS($text, $filepath) {
+    $success = false;
+    
+    // Create medication reminder text
+    $tts_text = "Take your " . $text . " medication now";
+    
+    // Method 1: Google Translate TTS
+    $text_encoded = urlencode($tts_text);
+    $tts_url = "https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&q={$text_encoded}&tl=en";
+    
+    $context = stream_context_create([
+        'http' => [
+            'method' => 'GET',
+            'header' => [
+                'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept: audio/mpeg, audio/*, */*',
+                'Accept-Language: en-US,en;q=0.9',
+                'Referer: https://translate.google.com/',
+                'Cache-Control: no-cache'
+            ],
+            'timeout' => 20
+        ]
+    ]);
+    
+    $audio_data = @file_get_contents($tts_url, false, $context);
+    if ($audio_data !== false && strlen($audio_data) > 500) { // Valid audio should be larger than 500 bytes
+        if (file_put_contents($filepath, $audio_data) !== false) {
+            $success = true;
+            error_log("TTS: Successfully generated Google TTS for: " . $text . " (Size: " . strlen($audio_data) . " bytes)");
+        }
     } else {
-        $wavPath = str_replace('.mp3', '.wav', $filepath);
-        $command = "espeak -s 150 -v en+f3 -w " . escapeshellarg($wavPath) . " " . escapeshellarg($text);
-        exec($command);
-        if (file_exists($wavPath)) {
-            exec("ffmpeg -y -i " . escapeshellarg($wavPath) . " " . escapeshellarg($filepath));
-            unlink($wavPath);
+        error_log("TTS: Google TTS failed for: " . $text . " (Response size: " . (($audio_data !== false) ? strlen($audio_data) : 'false') . ")");
+    }
+    
+    // Fallback: Try alternative URL format
+    if (!$success) {
+        $alt_url = "https://translate.google.com/translate_tts?ie=UTF-8&tl=en&client=gtx&q=" . urlencode($tts_text);
+        $audio_data = @file_get_contents($alt_url, false, $context);
+        
+        if ($audio_data !== false && strlen($audio_data) > 500) {
+            if (file_put_contents($filepath, $audio_data) !== false) {
+                $success = true;
+                error_log("TTS: Successfully generated Google TTS (alt) for: " . $text);
+            }
         }
     }
-    return file_exists($filepath);
+    
+    // Final fallback: Create a text file for client-side TTS
+    if (!$success) {
+        $tts_data = [
+            'text' => $tts_text,
+            'medication' => $text,
+            'timestamp' => time(),
+            'method' => 'client_side_tts'
+        ];
+        file_put_contents(str_replace('.mp3', '.json', $filepath), json_encode($tts_data));
+        error_log("TTS: Created client-side TTS data for: " . $text);
+        return true; // Return true so medication saving continues
+    }
+    
+    return $success;
+}
+
+// Web-based TTS function for servers without TTS software
+function generateWebBasedTTS($text, $filepath) {
+    $success = false;
+    
+    // Method 1: Google Translate TTS
+    $text_encoded = urlencode($text);
+    $tts_url = "https://translate.google.com/translate_tts?ie=UTF-8&client=tw-ob&q={$text_encoded}&tl=en";
+    
+    $context = stream_context_create([
+        'http' => [
+            'method' => 'GET',
+            'header' => [
+                'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept: audio/mpeg, */*',
+                'Referer: https://translate.google.com/'
+            ],
+            'timeout' => 15
+        ]
+    ]);
+    
+    $audio_data = @file_get_contents($tts_url, false, $context);
+    if ($audio_data !== false && strlen($audio_data) > 1000) { // Valid MP3 should be larger
+        file_put_contents($filepath, $audio_data);
+        $success = true;
+        error_log("TTS: Successfully generated using Google Translate for: " . $text);
+    }
+    
+    // Method 2: Alternative TTS service
+    if (!$success) {
+        $voicerss_key = 'demo'; // You can get a free API key from voicerss.org
+        $voicerss_url = "http://api.voicerss.org/?key={$voicerss_key}&hl=en-us&c=MP3&f=44khz_16bit_stereo&src=" . urlencode($text);
+        
+        $audio_data = @file_get_contents($voicerss_url);
+        if ($audio_data !== false && strlen($audio_data) > 1000) {
+            file_put_contents($filepath, $audio_data);
+            $success = true;
+            error_log("TTS: Successfully generated using VoiceRSS for: " . $text);
+        }
+    }
+    
+    // Method 3: Create a JSON file with text for client-side TTS
+    if (!$success) {
+        $tts_data = [
+            'text' => $text,
+            'timestamp' => time(),
+            'method' => 'client_side_tts'
+        ];
+        file_put_contents(str_replace('.mp3', '.json', $filepath), json_encode($tts_data));
+        error_log("TTS: Created client-side TTS data for: " . $text);
+        return true; // Return true so medication saving continues
+    }
+    
+    return $success;
 }
 ?>
 <!DOCTYPE html>
@@ -623,6 +753,15 @@ function generate_medication_tts($text, $filepath) {
                 </div>
             <?php endif; ?>
             
+            <?php if (isset($_GET['success'])): ?>
+                <div class="success-message" style="background: #d1fae5; border: 1px solid #10b981; color: #047857; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px; display: flex; align-items: center;">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 16px; height: 16px; margin-right: 0.5rem;">
+                        <polyline points="20,6 9,17 4,12"></polyline>
+                    </svg>
+                    Medication added successfully!
+                </div>
+            <?php endif; ?>
+            
             <form id="addMedicationForm" method="post" action="">
                 <input type="hidden" name="add_medication" value="1">
                 
@@ -712,6 +851,7 @@ function generate_medication_tts($text, $filepath) {
 
     <script src="assets/js/main.js"></script>
     <script src="assets/js/medication.js"></script>
+    <script src="assets/js/tts-fallback.js"></script>
     <script>
     // Popup logic for Add Medication
     const addMedicationModal = document.getElementById('addMedicationModal');
@@ -776,11 +916,6 @@ function generate_medication_tts($text, $filepath) {
         };
     });
     </script>
-    <script>
-        // Auto-refresh data every 5 seconds
-        setInterval(function() {
-            location.reload();
-        }, 5000);
-    </script>
+
 </body>
 </html>

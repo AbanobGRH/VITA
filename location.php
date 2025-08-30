@@ -2,6 +2,10 @@
 session_start();
 require_once 'api/config.php';
 
+// Enable error reporting for debugging
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
 // Function to calculate distance between two points (Haversine formula)
 function calculateDistance($lat1, $lon1, $lat2, $lon2) {
     $earthRadius = 6371000; // Earth radius in meters
@@ -15,54 +19,75 @@ function calculateDistance($lat1, $lon1, $lat2, $lon2) {
     return $earthRadius * $c;
 }
 
-// Get user data
-$userId = '550e8400-e29b-41d4-a716-446655440000';
-$pdo = getDBConnection();
+try {
+    // Get user data
+    $userId = '550e8400-e29b-41d4-a716-446655440000';
+    $pdo = getDBConnection();
 
-// Get latest location from database
-$stmt = $pdo->prepare("SELECT * FROM locations WHERE user_id = ? ORDER BY location_timestamp DESC LIMIT 1");
-$stmt->execute([$userId]);
-$latestLocation = $stmt->fetch();
+    // Get latest location from database
+    $stmt = $pdo->prepare("SELECT * FROM locations WHERE user_id = ? ORDER BY location_timestamp DESC LIMIT 1");
+    $stmt->execute([$userId]);
+    $latestLocation = $stmt->fetch();
 
-// If no location data exists, use default location
-if (!$latestLocation) {
+    // If no location data exists, use default location (Egypt)
+    if (!$latestLocation) {
+        $latestLocation = [
+            'latitude' => 29.963028,  // 29°57'46.9"N
+            'longitude' => 30.922028, // 30°55'19.3"E  
+            'accuracy' => 3.0,
+            'speed' => null,
+            'location_timestamp' => date('Y-m-d H:i:s'),
+            'is_safe_zone' => false,
+            'zone_name' => 'Default Location'
+        ];
+    }
+
+    // Get safe zones
+    $stmt = $pdo->prepare("SELECT * FROM safe_zones WHERE user_id = ? AND is_active = TRUE ORDER BY name");
+    $stmt->execute([$userId]);
+    $safeZones = $stmt->fetchAll();
+
+    // Check if current location is in any safe zone
+    $currentSafeZone = null;
+    foreach ($safeZones as $zone) {
+        $distance = calculateDistance(
+            $latestLocation['latitude'], 
+            $latestLocation['longitude'],
+            $zone['latitude'], 
+            $zone['longitude']
+        );
+        
+        if ($distance <= $zone['radius']) {
+            $currentSafeZone = $zone;
+            $latestLocation['is_safe_zone'] = true;
+            $latestLocation['zone_name'] = $zone['name'];
+            break;
+        }
+    }
+
+    // Get location history (last 24 hours)
+    $stmt = $pdo->prepare("SELECT * FROM locations WHERE user_id = ? AND location_timestamp >= DATE_SUB(NOW(), INTERVAL 24 HOUR) ORDER BY location_timestamp DESC LIMIT 10");
+    $stmt->execute([$userId]);
+    $locationHistory = $stmt->fetchAll();
+
+} catch (Exception $e) {
+    // Log error and show user-friendly message
+    error_log("Location page error: " . $e->getMessage());
+    
+    // Set default values to prevent further errors (Egypt location)
     $latestLocation = [
-        'latitude' => 39.7392,
-        'longitude' => -104.9903,
+        'latitude' => 29.963028,  // 29°57'46.9"N
+        'longitude' => 30.922028, // 30°55'19.3"E
         'accuracy' => 3.0,
+        'speed' => null,
         'location_timestamp' => date('Y-m-d H:i:s'),
         'is_safe_zone' => false,
-        'zone_name' => null
+        'zone_name' => 'Default Location'
     ];
+    $safeZones = [];
+    $currentSafeZone = null;
+    $locationHistory = [];
 }
-
-// Get safe zones
-$stmt = $pdo->prepare("SELECT * FROM safe_zones WHERE user_id = ? AND is_active = TRUE ORDER BY name");
-$stmt->execute([$userId]);
-$safeZones = $stmt->fetchAll();
-
-// Check if current location is in any safe zone
-$currentSafeZone = null;
-foreach ($safeZones as $zone) {
-    $distance = calculateDistance(
-        $latestLocation['latitude'], 
-        $latestLocation['longitude'],
-        $zone['latitude'], 
-        $zone['longitude']
-    );
-    
-    if ($distance <= $zone['radius']) {
-        $currentSafeZone = $zone;
-        $latestLocation['is_safe_zone'] = true;
-        $latestLocation['zone_name'] = $zone['name'];
-        break;
-    }
-}
-
-// Get location history (last 24 hours)
-$stmt = $pdo->prepare("SELECT * FROM locations WHERE user_id = ? AND location_timestamp >= DATE_SUB(NOW(), INTERVAL 24 HOUR) ORDER BY location_timestamp DESC LIMIT 10");
-$stmt->execute([$userId]);
-$locationHistory = $stmt->fetchAll();
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -221,86 +246,20 @@ $locationHistory = $stmt->fetchAll();
                                         ±<?= $latestLocation['accuracy'] ?> meters
                                     </p>
                                 </div>
-                                <?php if ($latestLocation['speed']): ?>
-                                <div class="stat-item">
-                                    <p class="stat-label">Speed</p>
-                                    <p class="stat-value">
-                                        <?= number_format($latestLocation['speed'], 1) ?> km/h
-                                    </p>
-                                </div>
-                                <?php endif; ?>
-                                <div class="stat-item">
-                                    <p class="stat-label">Last Update</p>
-                                    <p class="stat-value">
-                                        <?= date('M j, Y g:i A', strtotime($latestLocation['location_timestamp'])) ?>
-                                    </p>
-                                </div>
+                         
                             </div>
                         </div>
                         
-                        <div class="safety-status">
-                           
-                        </div>
-                </div>
-            </div>
-
-            <!-- Safe Zones and Location History -->
-            <div class="dashboard-grid">
-                <!-- Safe Zones -->
-                
-                                    </div>
-                                </div>
-                            <?php endforeach; ?>
-                        <?php endif; ?>
+          
                     </div>
                 </div>
+
+                <!-- Safe Zones and Location History -->
+                <div class="dashboard-grid">
+                
 
                 <!-- Location History -->
-                <div class="card">
-                    <div class="card-header">
-                        <h2>Location History</h2>
-                        <svg class="header-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <circle cx="12" cy="12" r="3"></circle>
-                            <path d="M12 1v6m0 6v6m11-7h-6m-6 0H1"></path>
-                        </svg>
-                    </div>
-                    
-                    <div class="history-list">
-                        <?php if (empty($locationHistory)): ?>
-                            <div class="empty-state">
-                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <circle cx="12" cy="12" r="3"></circle>
-                                    <path d="M12 1v6m0 6v6m11-7h-6m-6 0H1"></path>
-                                </svg>
-                                <p>No recent location history</p>
-                                <p class="empty-subtitle">Location data will appear here as it's collected</p>
-                            </div>
-                        <?php else: ?>
-                            <?php foreach ($locationHistory as $location): ?>
-                                <div class="history-item <?= $location['is_safe_zone'] ? 'safe' : 'neutral' ?>">
-                                    <div class="history-status"></div>
-                                    <div class="history-info">
-                                        <div class="history-header">
-                                            <span class="history-location">
-                                                <?= $location['zone_name'] ? htmlspecialchars($location['zone_name']) : 'Unknown Location' ?>
-                                            </span>
-                                            <span class="history-time">
-                                                <?= date('g:i A', strtotime($location['location_timestamp'])) ?>
-                                            </span>
-                                        </div>
-                                        <p class="history-details">
-                                            <?= number_format($location['latitude'], 4) ?>, <?= number_format($location['longitude'], 4) ?>
-                                            • Accuracy: ±<?= $location['accuracy'] ?>m
-                                            <?php if ($location['speed']): ?>
-                                                • Speed: <?= number_format($location['speed'], 1) ?> km/h
-                                            <?php endif; ?>
-                                        </p>
-                                    </div>
-                                </div>
-                            <?php endforeach; ?>
-                        <?php endif; ?>
-                    </div>
-                </div>
+          
             </div>
         </main>
     </div>
